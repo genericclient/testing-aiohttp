@@ -1,8 +1,6 @@
 from collections import defaultdict
-from concurrent.futures import CancelledError
 import inspect
 
-from aiohttp.client_exceptions import ServerDisconnectedError
 from aiohttp.test_utils import AioHTTPTestCase
 from aiohttp import web
 
@@ -11,7 +9,7 @@ class MockError(Exception):
     pass
 
 
-class RouteNotFoundError(CancelledError):
+class RouteNotFoundError(MockError):
     pass
 
 
@@ -50,10 +48,13 @@ class RouteManager(object):
 
         @return     None
         """
-        if exc_type is ServerDisconnectedError and self.testcase.url_not_found:
-            exc = self.testcase.url_not_found
-            self.testcase.url_not_found = None
-            raise exc
+        if self.testcase.urls_not_found:
+            urls = self.testcase.urls_not_found
+            self.testcase.urls_not_found = []
+            raise RouteNotFoundError(
+                "Those url were not found:\n\t"
+                "{}".format('\n\t'.join(urls))
+            )
 
         routes = [
             route
@@ -75,7 +76,7 @@ class MockRoutesTestCase(AioHTTPTestCase):
     def setUp(self):
         super(MockRoutesTestCase, self).setUp()
         self.routes = defaultdict(list)
-        self.url_not_found = []
+        self.urls_not_found = []
 
     async def route(self, request):
         method = request.method
@@ -83,9 +84,8 @@ class MockRoutesTestCase(AioHTTPTestCase):
         try:
             response = self.routes.get((method, path), []).pop()
         except IndexError:
-            exc = RouteNotFoundError("No url found for `{} {}`".format(method, path))
-            self.url_not_found = exc
-            raise exc
+            self.urls_not_found.append("{} {}".format(method, path))
+            return web.Response(status=499)
 
         if isinstance(response, web.Response):
             return response
