@@ -19,9 +19,6 @@ class RouteNotCalledError(MockError):
 
 class RouteManager(object):
 
-    def __init__(self, testcase, *args, **kwargs):
-        self.testcase = testcase
-
     def add(self, method, url, data=None, *, text=None, body=None, status=200,
                   reason=None, headers=None, content_type=None):  # noqa
         if data is not None:
@@ -29,12 +26,14 @@ class RouteManager(object):
         else:
             response = web.Response(text=text, body=body, status=status, reason=reason,
                     headers=headers, content_type=content_type)
-        self.testcase.routes[(method.upper(), url)].append(response)
+        self.routes[(method.upper(), url)].append(response)
 
     def add_callback(self, method, url, callback, *args, **kwargs):  # noqa
-        self.testcase.routes[(method.upper(), url)].append((callback, args, kwargs))
+        self.routes[(method.upper(), url)].append((callback, args, kwargs))
 
     def __enter__(self):
+        self.urls_not_found = []
+        self.routes = defaultdict(list)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -48,9 +47,9 @@ class RouteManager(object):
 
         @return     None
         """
-        if self.testcase.urls_not_found:
-            urls = self.testcase.urls_not_found
-            self.testcase.urls_not_found = []
+        if self.urls_not_found:
+            urls = self.urls_not_found[:]
+            self.urls_not_found = []
             raise RouteNotFoundError(
                 "Those url were not found:\n\t"
                 "{}".format('\n\t'.join(urls))
@@ -58,7 +57,7 @@ class RouteManager(object):
 
         routes = [
             route
-            for route, responses in self.testcase.routes.items()
+            for route, responses in self.routes.items()
             if len(responses)
         ]
         if len(routes):
@@ -71,13 +70,6 @@ class RouteManager(object):
                 "{}".format('\n\t'.join(urls))
             )
 
-
-class MockRoutesTestCase(AioHTTPTestCase):
-    def setUp(self):
-        super(MockRoutesTestCase, self).setUp()
-        self.routes = defaultdict(list)
-        self.urls_not_found = []
-
     async def route(self, request):
         method = request.method
         path = request.path
@@ -85,7 +77,7 @@ class MockRoutesTestCase(AioHTTPTestCase):
             response = self.routes.get((method, path), []).pop()
         except IndexError:
             self.urls_not_found.append("{} {}".format(method, path))
-            return web.Response(status=499)
+            return web.Response(status=499, content_type='unknown')
 
         if isinstance(response, web.Response):
             return response
@@ -97,10 +89,13 @@ class MockRoutesTestCase(AioHTTPTestCase):
                 status, headers, body = cb(request)
             return web.Response(body=body, headers=headers, status=status, *args, **kwargs)
 
+
+class MockRoutesTestCase(AioHTTPTestCase):
     async def get_application(self):
         app = web.Application()
-        app.router.add_route('*', '/{path_info:.*}', self.route)
+        self.route_manager = RouteManager()
+        app.router.add_route('*', '/{path_info:.*}', self.route_manager.route)
         return app
 
     def mock_response(self, *args, **kwargs):
-        return RouteManager(self, *args, **kwargs)
+        return self.route_manager
