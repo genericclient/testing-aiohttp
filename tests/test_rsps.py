@@ -38,7 +38,7 @@ class RSPSTestCase(MockRoutesTestCase):
 
             response = await self.client.get('/users')
             self.assertEqual(response.status, 404)
-    
+
     @unittest_run_loop
     async def test_response_match_querystring(self):
         with self.mock_response() as rsps:

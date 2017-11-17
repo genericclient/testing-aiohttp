@@ -31,8 +31,7 @@ class RouteManager(object):
                 raise IndexError
         return route
 
-    def add(self, method, url, data=None, *, text=None, body=None, status=200,
-                  reason=None, headers=None, content_type=None, match_querystring=False):  # noqa
+    def add(self, method, url, data=None, *, text=None, body=None, match_querystring=False, **kwargs):  # noqa
         add_options = AddOption(
             url=url,
             match_querystring=match_querystring,
@@ -41,10 +40,9 @@ class RouteManager(object):
         path = urlparse(url).path
 
         if data is not None:
-            response = web.json_response(data, status=status)  # noqa
+            response = web.json_response(data, **kwargs)  # noqa
         else:
-            response = web.Response(text=text, body=body, status=status, reason=reason,
-                    headers=headers, content_type=content_type)
+            response = web.Response(text=text, body=body, **kwargs)
         self.routes[(method.upper(), path)].append(AddedResponse(add_options, response))
 
     def add_callback(self, method, url, callback, *args, **kwargs):  # noqa
