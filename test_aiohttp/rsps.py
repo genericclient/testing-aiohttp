@@ -1,4 +1,6 @@
-from collections import defaultdict
+from collections import defaultdict, namedtuple
+from urllib.parse import urlparse
+
 import inspect
 
 from aiohttp.test_utils import AioHTTPTestCase
@@ -17,16 +19,33 @@ class RouteNotCalledError(MockError):
     pass
 
 
+AddedResponse = namedtuple('AddedResponse', ('add_options', 'response'))
+AddOption = namedtuple('AddOption', ('url', 'match_querystring'))
+
+
 class RouteManager(object):
+    def find(self, method, path, path_qs):
+        route = self.routes.get((method, path), []).pop()
+        if isinstance(route, AddedResponse):
+            if route.add_options.match_querystring is True and route.add_options.url != path_qs:
+                raise IndexError
+        return route
 
     def add(self, method, url, data=None, *, text=None, body=None, status=200,
-                  reason=None, headers=None, content_type=None):  # noqa
+                  reason=None, headers=None, content_type=None, match_querystring=False):  # noqa
+        add_options = AddOption(
+            url=url,
+            match_querystring=match_querystring,
+        )
+
+        path = urlparse(url).path
+
         if data is not None:
             response = web.json_response(data, status=status)  # noqa
         else:
             response = web.Response(text=text, body=body, status=status, reason=reason,
                     headers=headers, content_type=content_type)
-        self.routes[(method.upper(), url)].append(response)
+        self.routes[(method.upper(), path)].append(AddedResponse(add_options, response))
 
     def add_callback(self, method, url, callback, *args, **kwargs):  # noqa
         self.routes[(method.upper(), url)].append((callback, args, kwargs))
@@ -73,16 +92,17 @@ class RouteManager(object):
     async def route(self, request):
         method = request.method
         path = request.path
+        path_qs = request.path_qs
         try:
-            response = self.routes.get((method, path), []).pop()
+            added_response = self.find(method, path, path_qs)
         except IndexError:
             self.urls_not_found.append("{} {}".format(method, path))
             return web.Response(status=499, content_type='unknown')
 
-        if isinstance(response, web.Response):
-            return response
-        elif isinstance(response, tuple):
-            cb, args, kwargs = response
+        if isinstance(added_response, AddedResponse):
+            return added_response.response
+        elif isinstance(added_response, tuple):
+            cb, args, kwargs = added_response
             if inspect.iscoroutinefunction(cb):
                 status, headers, body = await cb(request)
             else:
