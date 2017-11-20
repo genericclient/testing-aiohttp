@@ -1,10 +1,36 @@
+from enum import Enum, unique
+from functools import partialmethod
 from collections import defaultdict, namedtuple
-from urllib.parse import urlparse
+from unittest import mock
+from urllib.parse import parse_qsl
 
 import inspect
+import json as json_mod
 
-from aiohttp.test_utils import AioHTTPTestCase
-from aiohttp import web
+from aiohttp import payload
+from aiohttp.client_reqrep import ClientResponse
+from multidict import MultiDict, CIMultiDict
+from yarl import URL
+
+
+@unique
+class HTTPMethods(Enum):
+    GET = 'GET'
+    POST = 'POST'
+    PUT = 'PUT'
+    PATCH = 'PATCH'
+    DELETE = 'DELETE'
+    OPTIONS = 'OPTIONS'
+    HEAD = 'HEAD'
+
+
+GET = HTTPMethods.GET
+POST = HTTPMethods.POST
+PUT = HTTPMethods.PUT
+PATCH = HTTPMethods.PATCH
+DELETE = HTTPMethods.DELETE
+OPTIONS = HTTPMethods.OPTIONS
+HEAD = HTTPMethods.HEAD
 
 
 class MockError(Exception):
@@ -19,38 +45,70 @@ class RouteNotCalledError(MockError):
     pass
 
 
+AddOption = namedtuple('AddOption', ('querystring', 'match_querystring'))
 AddedResponse = namedtuple('AddedResponse', ('add_options', 'response'))
-AddOption = namedtuple('AddOption', ('url', 'match_querystring'))
+CallbackResponse = namedtuple('CallbackResponse', ('cb', 'args', 'kwargs'))
+Request = namedtuple('Request', ('method', 'url', 'headers', 'data', 'body'))
 
 
 class RouteManager(object):
-    def find(self, method, path, path_qs):
-        route = self.routes.get((method, path), []).pop()
-        if isinstance(route, AddedResponse):
-            if route.add_options.match_querystring is True and route.add_options.url != path_qs:
-                raise IndexError
-        return route
+    GET = GET
+    POST = POST
+    PUT = PUT
+    PATCH = PATCH
+    DELETE = DELETE
+    OPTIONS = OPTIONS
+    HEAD = HEAD
 
-    def add(self, method, url, data=None, *, text=None, body=None, match_querystring=False, **kwargs):  # noqa
+    def add(self, method, url, *, data=None, json=None, text=None, content_type=None, match_querystring=False, headers=None, status=200):  # noqa
+        url = URL(url)
+        path = url.with_query({})
         add_options = AddOption(
-            url=url,
+            querystring=url.query_string,
             match_querystring=match_querystring,
         )
 
-        path = urlparse(url).path
+        if isinstance(method, HTTPMethods):
+            method = method.name
 
-        if data is not None:
-            response = web.json_response(data, **kwargs)  # noqa
-        else:
-            response = web.Response(text=text, body=body, **kwargs)
-        self.routes[(method.upper(), path)].append(AddedResponse(add_options, response))
+        body = ''
+        if json is not None:
+            content_type = content_type or 'application/json'
+            body = json_mod.dumps(json)
+        elif data is not None:
+            content_type = content_type or 'application/octet-stream'
+            body = data
+        elif text is not None:
+            content_type = content_type or 'text/plain'
+            body = text
+
+        headers = CIMultiDict(headers or {})
+
+        response = self.make_response(
+            method, URL(url), body=body, status=status, content_type=content_type, headers=headers,
+        )
+
+        self.routes[(method.upper(), str(path))].append(AddedResponse(add_options, response))
 
     def add_callback(self, method, url, callback, *args, **kwargs):  # noqa
-        self.routes[(method.upper(), url)].append((callback, args, kwargs))
+        callback_response = CallbackResponse(callback, args, kwargs)
+        if isinstance(method, HTTPMethods):
+            method = method.name
+        self.routes[(method.upper(), url)].append(callback_response)
 
     def __enter__(self):
         self.urls_not_found = []
         self.routes = defaultdict(list)
+
+        self.start()
+        return self
+
+    async def __aenter__(self):
+        self.urls_not_found = []
+        self.routes = defaultdict(list)
+
+        self.start()
+
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -64,6 +122,38 @@ class RouteManager(object):
 
         @return     None
         """
+        self.stop()
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        self.stop()
+
+    def start(self):
+        async def unbound_request(session, method, url, *,
+                                  params=None, data=None, json=None, headers=None, **kwargs):
+            req = self.make_request(session, method, url,
+                                    params=params, data=data, json=json, headers=headers, **kwargs)
+            resp = await self.route(req)
+            return resp
+
+        self._patchers = []
+
+        for method in HTTPMethods:
+            func = partialmethod(unbound_request, method.name)
+            patcher = mock.patch(
+                'aiohttp.client.ClientSession.' + method.name.lower(), func,
+            )
+            patcher.start()
+            self._patchers.append(patcher)
+
+        patcher = mock.patch(
+            'aiohttp.client.ClientSession._request', unbound_request,
+        )
+        patcher.start()
+        self._patchers.append(patcher)
+
+    def stop(self):
+        [patcher.stop() for patcher in self._patchers]
+
         if self.urls_not_found:
             urls = self.urls_not_found[:]
             self.urls_not_found = []
@@ -87,33 +177,76 @@ class RouteManager(object):
                 "{}".format('\n\t'.join(urls))
             )
 
+    def find(self, method, path, query_string):
+        route = self.routes.get((method, path), []).pop()
+        if isinstance(route, AddedResponse):
+            if route.add_options.match_querystring is True and route.add_options.querystring != query_string:
+                raise IndexError
+        return route
+
+    def make_response(self, method, url, *, body='', status=200, content_type='application/octet-stream', headers=None):
+        if headers is None:
+            headers = {}
+        headers.setdefault('Content-Type', content_type)
+
+        resp = ClientResponse(method, url)
+        resp._content = body.encode()
+        resp.headers = headers
+        resp.status = status
+        return resp
+
+    def make_request(self, session, method, url, *,
+                     params=None, data=None, json=None, headers=None, **kwargs):
+        if data is not None and json is not None:
+            raise ValueError(
+                'data and json parameters can not be used at the same time')
+        elif json is not None:
+            data = payload.JsonPayload(json, dumps=session._json_serialize)
+
+        headers = session._prepare_headers(headers)
+
+        return session._request_class(
+            method, URL(url), loop=session._loop,
+            response_class=session._response_class,
+            session=session, auto_decompress=session._auto_decompress,
+            params=params, data=data, headers=headers, **kwargs)
+
+    def make_server_request(self, client_request):
+        if client_request.body.content_type == 'application/x-www-form-urlencoded':
+            data = MultiDict(parse_qsl(
+                client_request.body._value.decode(client_request.body.encoding)
+            ))
+        elif client_request.body.content_type == 'application/json':
+            data = json_mod.loads(client_request.body._value.decode(client_request.body.encoding))
+        else:
+            data = client_request.body._value
+
+        return Request(
+            client_request.method,
+            client_request.url,
+            client_request.headers,
+            data,
+            client_request.body,
+        )
+
     async def route(self, request):
         method = request.method
-        path = request.path
-        path_qs = request.path_qs
+        path = request.url.with_query({})
+        querystring = request.url.query_string
         try:
-            added_response = self.find(method, path, path_qs)
+            added_response = self.find(method, str(path), querystring)
         except IndexError:
             self.urls_not_found.append("{} {}".format(method, path))
-            return web.Response(status=499, content_type='unknown')
+            return self.make_response(method, request.url, status=499, content_type='unknown')
 
         if isinstance(added_response, AddedResponse):
             return added_response.response
-        elif isinstance(added_response, tuple):
+        elif isinstance(added_response, CallbackResponse):
             cb, args, kwargs = added_response
+
+            server_request = self.make_server_request(request)
             if inspect.iscoroutinefunction(cb):
-                status, headers, body = await cb(request)
+                status, headers, body = await cb(server_request)
             else:
-                status, headers, body = cb(request)
-            return web.Response(body=body, headers=headers, status=status, *args, **kwargs)
-
-
-class MockRoutesTestCase(AioHTTPTestCase):
-    async def get_application(self):
-        app = web.Application()
-        self.route_manager = RouteManager()
-        app.router.add_route('*', '/{path_info:.*}', self.route_manager.route)
-        return app
-
-    def mock_response(self, *args, **kwargs):
-        return self.route_manager
+                status, headers, body = cb(server_request)
+            return self.make_response(method, request.url, body=body, headers=headers, status=status)
