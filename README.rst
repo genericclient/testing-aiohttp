@@ -18,27 +18,6 @@ Installation
 Usage
 =====
 
-``AioLoopTestCase``
--------------------
-
-A ``TestCase`` subclass to provides an asyncio loop, so that it can be used in conjuction with ``aiohttp.test_utils.unittest_run_loop``::
-
-    from aiohttp.test_utils import unittest_run_loop
-
-    from test_aiohttp import AioLoopTestCase
-
-    async def add(a, b):
-        return a + b
-
-    # Create your tests here.
-    class MyTestCase(AioLoopTestCase):
-        @unittest_run_loop
-        async def test_something_async(self):
-            my_result = await add(1, 2)
-            self.assertEqual(my_result, 3)
-
-For convenience, it also provides ``setUpAsync`` and a ``tearDownAsync`` methods.
-
 ``RouteManager``
 ---------------------------
 
@@ -47,14 +26,13 @@ For convenience, it also provides ``setUpAsync`` and a ``tearDownAsync`` methods
 The API is inspired by the ``responses`` library::
 
     from aiohttp import ClientSession
-    from aiohttp.test_utils import unittest_run_loop
+    from asynctest import TestCase
 
-    from testing_aiohttp import AioLoopTestCase, RouteManager
+    from testing_aiohttp import RouteManager
 
 
     # Create your tests here.
-    class MyTestCase(AioLoopTestCase):
-        @unittest_run_loop
+    class MyTestCase(TestCase):
         async def test_response_data(self):
             with RouteManager() as rsps:
                 rsps.add('GET', 'http://example.org/users', json=[
@@ -79,18 +57,17 @@ The API is inspired by the ``responses`` library::
 ::
 
     from aiohttp import ClientSession
-    from aiohttp.test_utils import unittest_run_loop
+    from asynctest import TestCase
 
-    from testing_aiohttp import AioLoopTestCase, RouteManager
+    from testing_aiohttp import RouteManager
 
 
     async def request_callback(request):
         return (200, {}, 'ok')
 
 
-    class MyTestCase(AioLoopTestCase):
+    class MyTestCase(TestCase):
 
-        @unittest_run_loop
         async def test_endpoint_detail_route(self):
             with RouteManager() as rsps:
                 rsps.add_callback(
@@ -105,13 +82,12 @@ The API is inspired by the ``responses`` library::
 
 ::
     from aiohttp import ClientSession
-    from aiohttp.test_utils import unittest_run_loop
+    from asynctest import TestCase
 
-    from testing_aiohttp.rsps import AioLoopTestCase, RouteManager, RouteNotFoundError
+    from testing_aiohttp.rsps import RouteManager, RouteNotFoundError
 
 
-    class MyTestCase(AioLoopTestCase):
-        @unittest_run_loop
+    class MyTestCase(TestCase):
         async def test_response_match_querystring(self):
             with RouteManager() as rsps:
                 rsps.add('GET', 'http://example.org/users?username=user1', json=[

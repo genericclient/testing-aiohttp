@@ -1,9 +1,9 @@
 import json
-from aiohttp.test_utils import unittest_run_loop
 
 from aiohttp import ClientSession
+from asynctest import TestCase
 
-from test_aiohttp import AioLoopTestCase, RouteManager, RouteNotCalledError, RouteNotFoundError
+from test_aiohttp import RouteManager, RouteNotCalledError, RouteNotFoundError
 
 
 async def request_callback(request):
@@ -11,14 +11,13 @@ async def request_callback(request):
 
 
 # Create your tests here.
-class RSPSTestCase(AioLoopTestCase):
+class RSPSTestCase(TestCase):
     BASE_URL = 'http://example.org'
 
     def setUp(self):
         super().setUp()
         self.session = ClientSession(loop=self.loop)
 
-    @unittest_run_loop
     async def test_response_data(self):
         with RouteManager() as rsps:
             async with self.session as client:
@@ -40,7 +39,6 @@ class RSPSTestCase(AioLoopTestCase):
                 users = await response.json()
                 self.assertEqual(len(users), 2)
 
-    @unittest_run_loop
     async def test_response_status_code(self):
         with RouteManager() as rsps:
             rsps.add(rsps.GET, self.BASE_URL + '/users', json={'details': 'Not found'}, status=404)
@@ -54,7 +52,6 @@ class RSPSTestCase(AioLoopTestCase):
                 response = await client.post(self.BASE_URL + '/users')
                 self.assertEqual(response.status, 201)
 
-    @unittest_run_loop
     async def test_response_match_querystring(self):
         with RouteManager() as rsps:
             rsps.add(rsps.GET, self.BASE_URL + '/users?username=user1', json=[
@@ -84,7 +81,6 @@ class RSPSTestCase(AioLoopTestCase):
                 async with self.session as client:
                     await client.get(self.BASE_URL + '/users')
 
-    @unittest_run_loop
     async def test_must_match_all(self):
         with self.assertRaises(RouteNotCalledError):
             with RouteManager() as rsps:
@@ -116,14 +112,12 @@ class RSPSTestCase(AioLoopTestCase):
                 async with self.session as client:
                     await client.get(self.BASE_URL + '/users/1')
 
-    @unittest_run_loop
     async def test_route_not_found(self):
         with self.assertRaises(RouteNotFoundError):
             with RouteManager():
                 async with self.session as client:
                     await client.get(self.BASE_URL + '/users')
 
-    @unittest_run_loop
     async def test_response_text(self):
         with RouteManager() as rsps:
             rsps.add(rsps.GET, self.BASE_URL + '/users', text='ok')
@@ -134,7 +128,6 @@ class RSPSTestCase(AioLoopTestCase):
         text = await response.text()
         self.assertEqual(text, 'ok')
 
-    @unittest_run_loop
     async def test_response_content_type(self):
         with RouteManager() as rsps:
             rsps.add(rsps.GET, self.BASE_URL + '/users', text='<h1>ok</h1>', content_type='text/html')
@@ -143,7 +136,6 @@ class RSPSTestCase(AioLoopTestCase):
                 response = await client.get(self.BASE_URL + '/users')
                 self.assertEqual(response.content_type, 'text/html')
 
-    @unittest_run_loop
     async def test_response_callback(self):
         with RouteManager() as rsps:
             rsps.add_callback(rsps.POST, self.BASE_URL + '/users', callback=request_callback)
