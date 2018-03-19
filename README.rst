@@ -21,7 +21,7 @@ Usage
 ``RouteManager``
 ---------------------------
 
-``RouteManager`` will mock up responses for `aiohttp.Client``.
+``RouteManager`` will mock up responses for ``aiohttp.Client``.
 
 The API is inspired by the ``responses`` library::
 
@@ -81,6 +81,7 @@ The API is inspired by the ``responses`` library::
                 self.assertEqual(await response.text(), 'ok')
 
 ::
+
     from aiohttp import ClientSession
     from asynctest import TestCase
 
